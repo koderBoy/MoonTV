@@ -3,7 +3,7 @@
 import { NextRequest } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
+import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { searchFromApiStream } from '@/lib/downstream';
 import { yellowWords } from '@/lib/yellow';
 
@@ -34,6 +34,10 @@ export async function GET(request: NextRequest) {
   const timeout = timeoutParam ? parseInt(timeoutParam, 10) * 1000 : undefined; // 转换为毫秒
 
   const config = await getConfig();
+  // 下游翻页上限与缓存时间都从已经取到的 config 里读，
+  // 不再重复调用 getConfig() / getCacheTime()（每次都要读库 + 解析配置）。
+  const maxPages = config.SiteConfig.SearchDownstreamMaxPage;
+  const cacheTime = config.SiteConfig.SiteInterfaceCacheTime || 7200;
   
   // 获取用户可用的搜索源
   let apiSites = await getAvailableApiSites(authInfo?.username);
@@ -92,7 +96,7 @@ export async function GET(request: NextRequest) {
       const siteResults: any[] = [];
       let hasResults = false;
       try {
-        const generator = searchFromApiStream(site, query, true, timeout);
+        const generator = searchFromApiStream(site, query, true, timeout, maxPages);
         for await (const pageResults of generator) {
           let filteredResults = pageResults;
           if (filteredResults.length !== 0) {
@@ -147,7 +151,6 @@ export async function GET(request: NextRequest) {
         },
       });
     } else {
-      const cacheTime = await getCacheTime();
       const body = { results: aggregatedResults, failedSources };
       return new Response(JSON.stringify(body), {
         headers: {
@@ -162,12 +165,11 @@ export async function GET(request: NextRequest) {
   // 流式：并发
   // -------------------------
   (async () => {
-    const aggregatedResults: any[] = [];
     const failedSources: { name: string; key: string; error: string }[] = [];
 
     const tasks = apiSites.map(async (site) => {
       try {
-        const generator = searchFromApiStream(site, query, true, timeout);
+        const generator = searchFromApiStream(site, query, true, timeout, maxPages);
         let hasResults = false;
 
         for await (const pageResults of generator) {
@@ -188,7 +190,6 @@ export async function GET(request: NextRequest) {
             return;
           }
 
-          aggregatedResults.push(...filteredResults);
           if (!(await safeWrite({ site: site.key, pageResults: filteredResults }))) {
             return;
           }
@@ -222,7 +223,8 @@ export async function GET(request: NextRequest) {
     if (failedSources.length > 0) {
       await safeWrite({ failedSources });
     }
-    await safeWrite({ aggregatedResults });
+    // 不再额外写一份 aggregatedResults：所有结果已经在上面按页流式发出，
+    // 这里再 JSON.stringify 一遍全量结果纯属重复开销（仓库内没有任何客户端读取它）。
 
     try {
       await writer.close();
@@ -231,7 +233,6 @@ export async function GET(request: NextRequest) {
     }
   })();
 
-  const cacheTime = await getCacheTime();
   return new Response(readable, {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',

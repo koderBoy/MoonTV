@@ -246,7 +246,9 @@ export function cleanHtmlTags(text: string): string {
     .trim(); // 去掉首尾空格
 
   // 使用 he 库解码 HTML 实体
-  return he.decode(cleanedText);
+  // he.decode 是搜索链路里的 CPU 热点（对每个结果项都要跑一遍）。
+  // 绝大多数简介里根本没有 HTML 实体，先做一次 O(n) 的 & 探测即可整体跳过解码。
+  return cleanedText.includes('&') ? he.decode(cleanedText) : cleanedText;
 }
 
 /**
