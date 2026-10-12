@@ -49,6 +49,24 @@ export const API_CONFIG = {
 let fileConfig: ConfigFileStruct;
 let cachedConfig: AdminConfig;
 
+/**
+ * 非 localstorage 模式下 admin 配置的内存缓存时间。
+ *
+ * 背景：getConfig() 在 d1/upstash 模式下每次调用都会
+ *   读一次数据库 -> JSON.parse(ConfigFile) -> 重建若干 Map/Set 做源合并。
+ * 一次 /api/search 请求会触发十几次 getConfig()（路由本身、getAvailableApiSites、
+ * 每个源的 searchFromApiStream、getCacheTime），这些重复的解析在
+ * Cloudflare Workers 免费版 10ms CPU 预算里占比很高。
+ *
+ * Workers 的 isolate 会在请求之间复用模块级变量，因此加一层短 TTL 内存缓存
+ * 既能把重复解析降到 1 次，又不会让后台改配置长时间不生效。
+ * 默认 5s；设成 0 可关闭缓存回到旧行为。
+ */
+const ADMIN_CONFIG_CACHE_TTL_MS = Number(
+  process.env.ADMIN_CONFIG_CACHE_TTL_MS ?? 5000
+);
+let adminConfigCachedAt = 0;
+
 export function refineConfig(adminConfig: AdminConfig): AdminConfig {
   try {
     fileConfig = JSON.parse(adminConfig.ConfigFile) as ConfigFileStruct;
@@ -371,6 +389,7 @@ async function initConfig() {
   
       // 更新缓存
       cachedConfig = adminConfig;
+      adminConfigCachedAt = Date.now();
     } catch (err) {
       console.error('加载管理员配置失败:', err);
     }
@@ -437,6 +456,15 @@ export async function getConfig(): Promise<AdminConfig> {
   }
 
   // 非本地存储，直接读 db 配置
+  // 命中内存缓存则直接返回，跳过「读库 + JSON.parse(ConfigFile) + 源合并」这一整套开销
+  if (
+    ADMIN_CONFIG_CACHE_TTL_MS > 0 &&
+    cachedConfig &&
+    Date.now() - adminConfigCachedAt < ADMIN_CONFIG_CACHE_TTL_MS
+  ) {
+    return cachedConfig;
+  }
+
   const storage = getStorage();
   let adminConfig: AdminConfig | null = null;
   if (storage && typeof (storage as any).getAdminConfig === 'function') {
@@ -625,6 +653,7 @@ export async function getConfig(): Promise<AdminConfig> {
       });
     }
     cachedConfig = adminConfig;
+    adminConfigCachedAt = Date.now();
   } else {
     await initConfig();
   }
@@ -810,6 +839,7 @@ export async function resetConfig() {
   cachedConfig.SourceConfig = adminConfig.SourceConfig;
   cachedConfig.CustomCategories = adminConfig.CustomCategories || [];
   cachedConfig.SubscriptionConfig = adminConfig.SubscriptionConfig;
+  adminConfigCachedAt = Date.now();
 }
 
 export async function getCacheTime(): Promise<number> {
@@ -839,4 +869,5 @@ export async function getAvailableApiSites(username?: string): Promise<ApiSite[]
 
 export async function setCachedConfig(config: AdminConfig) {
   cachedConfig = config;
+  adminConfigCachedAt = Date.now();
 }

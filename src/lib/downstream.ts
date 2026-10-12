@@ -108,7 +108,13 @@ export async function* searchFromApiStream(
   apiSite: ApiSite,
   query: string,
   parallel = true,
-  timeout?: number
+  timeout?: number,
+  /**
+   * 下游翻页上限。由调用方传入，避免每个源都在生成器内部再读一次配置
+   * （一次 /api/search 里有 N 个源，就会重复读 N 次 getConfig）。
+   * 不传时保持旧行为，回退到读配置。
+   */
+  maxPagesOverride?: number
 ): AsyncGenerator<SearchResult[], void, unknown> {
   const apiUrl = apiSite.api + API_CONFIG.search.path + encodeURIComponent(query);
 
@@ -122,8 +128,13 @@ export async function* searchFromApiStream(
   yield data.list.map((item: ApiSearchItem) => mapItemToResult(item, apiSite, apiSite.name));
 
   // 分页
-  const { SiteConfig } = await getConfig();
-  const maxPages = SiteConfig.SearchDownstreamMaxPage;
+  let maxPages: number;
+  if (typeof maxPagesOverride === 'number') {
+    maxPages = maxPagesOverride;
+  } else {
+    const { SiteConfig } = await getConfig();
+    maxPages = SiteConfig.SearchDownstreamMaxPage;
+  }
   const pageCount = data.pagecount || 1;
   const pagesToFetch = Math.min(pageCount, maxPages);
 
