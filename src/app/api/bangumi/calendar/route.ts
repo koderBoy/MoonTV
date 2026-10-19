@@ -32,12 +32,16 @@ function replaceImageUrl(
   data: BangumiCalendarData[],
   imageProxy: string
 ): BangumiCalendarData[] {
-  if (!imageProxy) return data;
+  // 无论是否配置图片代理，都必须过滤掉 images 为 null 的条目：
+  // 客户端渲染新番卡片时会直接读 item.images.large，null 会抛
+  // TypeError: Cannot read properties of null (reading 'large')，
+  // 进而触发整页的 "Application error: a client-side exception"。
   return data.map((day) => ({
     ...day,
     items: (day.items || [])
-      .filter((item) => item.images)
+      .filter((item) => item && item.images)
       .map((item) => {
+        if (!imageProxy) return item;
         const replace = (url: string) =>
           url.replace('https://lain.bgm.tv', imageProxy);
         return {

@@ -114,6 +114,10 @@ export default function VideoCard({
 
   const actualTitle = aggregateData?.first.title ?? title;
   const actualPoster = aggregateData?.first.poster ?? poster;
+  // 海报地址可能为空（例如番剧日历数据缺少封面），此时不渲染 <Image>，
+  // 否则 next/image 会因 src 为空直接抛错，导致整页 client-side exception。
+  const imageSrc =
+    typeof actualPoster === 'string' ? processImageUrl(actualPoster) : '';
   const actualSource = aggregateData?.first.source ?? source;
   const actualId = aggregateData?.first.id ?? id;
   const actualDoubanId = aggregateData?.mostFrequentDoubanId ?? douban_id;
@@ -404,24 +408,26 @@ export default function VideoCard({
       {/* 图片和播放按钮 */}
       <div className='relative aspect-[2/3] overflow-hidden rounded-lg'>
         {!isLoading && <ImagePlaceholder aspectRatio='aspect-[2/3]' />}
-        <Image
-          src={processImageUrl(actualPoster)}
-          alt={actualTitle}
-          fill
-          className='object-cover'
-          referrerPolicy='no-referrer'
-          loading='lazy'
-          onLoad={() => setIsLoading(true)}
-          onError={(e) => {
-            const img = e.target as HTMLImageElement;
-            if (!img.dataset.retried) {
-              img.dataset.retried = 'true';
-              setTimeout(() => {
-                img.src = processImageUrl(actualPoster);
-              }, 2000);
-            }
-          }}
-        />
+        {imageSrc && (
+          <Image
+            src={imageSrc}
+            alt={actualTitle}
+            fill
+            className='object-cover'
+            referrerPolicy='no-referrer'
+            loading='lazy'
+            onLoad={() => setIsLoading(true)}
+            onError={(e) => {
+              const img = e.target as HTMLImageElement;
+              if (!img.dataset.retried) {
+                img.dataset.retried = 'true';
+                setTimeout(() => {
+                  img.src = imageSrc;
+                }, 2000);
+              }
+            }}
+          />
+        )}
 
         <div className='absolute inset-0 bg-gradient-to-t from-black/80 via-black-20 to-transparent opacity-0 transition-opacity duration-300 ease-in-out group-hover:opacity-100' />
 
@@ -618,7 +624,7 @@ export default function VideoCard({
         isOpen={isActionOpen}
         onClose={() => setIsActionOpen(false)}
         title={actualTitle}
-        poster={processImageUrl(actualPoster)}
+        poster={imageSrc}
         sourceName={source_name}
         isAggregate={isAggregate}
         sources={isAggregate && items ? items.map(i => i.source_name || '').filter(Boolean) : []}
